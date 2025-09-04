@@ -1,0 +1,66 @@
+import os, json, time
+from typing import Dict, Any, List
+
+STATE_FILE = "trade_state.json"
+
+def _empty() -> Dict[str, Any]:
+    return {"next_id": 1, "trades": []}
+
+def load_state() -> Dict[str, Any]:
+    if not os.path.exists(STATE_FILE):
+        return _empty()
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return _empty()
+
+def save_state(state: Dict[str, Any]) -> None:
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, STATE_FILE)
+
+def list_trades() -> List[Dict[str, Any]]:
+    return load_state()["trades"]
+
+def reset_all() -> None:
+    save_state(_empty())
+
+def add_trade(symbol: str, amount_usdc: float, entry_price: float,
+              qty: float, spent_usdc: float) -> Dict[str, Any]:
+    st = load_state()
+    tid = st["next_id"]
+    trade = {
+        "id": tid,
+        "symbol": symbol,
+        "status": "open",
+        "created_at": int(time.time()),
+        "entry_price": entry_price,
+        "qty": qty,
+        "amount_usdc": amount_usdc,
+        "spent_usdc": spent_usdc,
+        "high_watermark": entry_price,
+        "last_reason": None
+    }
+    st["trades"].append(trade)
+    st["next_id"] = tid + 1
+    save_state(st)
+    return trade
+
+def delete_trade(trade_id: int) -> bool:
+    st = load_state()
+    before = len(st["trades"])
+    st["trades"] = [t for t in st["trades"] if t["id"] != trade_id]
+    changed = len(st["trades"]) != before
+    if changed:
+        save_state(st)
+    return changed
+
+
+def get_trade(trade_id: int):
+    st = load_state()
+    for t in st.get("trades", []):
+        if t.get("id") == trade_id:
+            return t
+    return None

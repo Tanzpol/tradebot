@@ -1,0 +1,116 @@
+from flask import Flask, jsonify, request, Response
+from binance.spot import Spot as BinanceClient
+from datetime import datetime
+import html
+import time
+
+from config import FLASK_SECRET
+
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET
+
+DEFAULT_SYMBOL = "BTCUSDC"
+
+def get_price(symbol: str):
+    # Публичный клиент Binance (без ключей). Берём цену с мейннета для максимальной точности.
+    client = BinanceClient()
+    data = client.ticker_price(symbol)
+    return float(data["price"])
+
+@app.get("/")
+def index():
+    # Простой HTML без шаблонов — сразу видно курс вживую.
+    return Response("""<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradeSRVbot — Живой курс</title>
+<style>
+  body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;margin:24px}}
+  .row{{display:flex;gap:12px;flex-wrap:wrap;align-items:center}}
+  .price{{font-size:42px;font-weight:700}}
+  .muted{{color:#666}}
+  .ok{{color:#0a0}}
+  .warn{{color:#b00}}
+  input,select,button{{padding:8px 10px;border:1px solid #ccc;border-radius:8px}}
+  .card{{border:1px solid #ddd;border-radius:12px;padding:16px;margin-top:16px}}
+</style>
+</head>
+<body>
+  <h1>TradeSRVbot</h1>
+  <div class="card">
+    <div class="row">
+      <label for="symbol">Пара:</label>
+      <select id="symbol">
+        <option value="BTCUSDC" selected>BTC/USDC</option>
+        <option value="BTCUSDT">BTC/USDT</option>
+        <option value="BNBUSDC">BNB/USDC</option>
+      </select>
+      <span id="status" class="muted">Идёт подключение…</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="price"><span id="price">—</span></div>
+      <div class="muted">обновление: <span id="ts">—</span></div>
+    </div>
+  </div>
+
+  <script>
+    const priceEl = document.getElementById('price');
+    const tsEl = document.getElementById('ts');
+    const statusEl = document.getElementById('status');
+    const sel = document.getElementById('symbol');
+
+    let last = null;
+    let timer = null;
+
+    function fmt(n){ return Number(n).toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+    function now(){ const d=new Date(); return d.toLocaleTimeString('ru-RU'); }
+
+    async function poll(){
+      const symbol = sel.value;
+      try{
+        const r = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`, {cache:'no-store'});
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        const j = await r.json();
+        const p = Number(j.price);
+        const prev = last; last = p;
+        priceEl.textContent = fmt(p);
+        tsEl.textContent = now();
+        // мигание цветом: рост зелёный, падение красный
+        if(prev !== null){
+          const up = p > prev; const cls = up ? 'ok' : 'warn';
+          priceEl.classList.add(cls);
+          setTimeout(()=>priceEl.classList.remove(cls), 300);
+        }
+        statusEl.textContent = 'Live'; statusEl.className = 'ok';
+      }catch(e){
+        statusEl.textContent = 'Потеря связи — переподключение…';
+        statusEl.className = 'warn';
+      }
+    }
+
+    function start(){
+      if(timer) clearInterval(timer);
+      poll();
+      timer = setInterval(poll, 500); // ~2 раза в секунду
+    }
+
+    sel.addEventListener('change', start);
+    start();
+  </script>
+</body>
+</html>""", mimetype="text/html")
+
+@app.get("/api/price")
+def api_price():
+    symbol = request.args.get("symbol", DEFAULT_SYMBOL).upper()
+    try:
+        price = get_price(symbol)
+        return jsonify({"symbol": symbol, "price": price, "server_ts": int(time.time())})
+    except Exception as e:
+        return jsonify({"error": str(e), "symbol": symbol}), 500
+
+if __name__ == "__main__":
+    # Запуск dev-сервера
+    app.run(host="0.0.0.0", port=5000, debug=True)

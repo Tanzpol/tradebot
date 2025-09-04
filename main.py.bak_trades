@@ -1,0 +1,339 @@
+from flask import Flask, jsonify, request, Response
+from binance.spot import Spot as BinanceClient
+import time
+
+from config import FLASK_SECRET, TOP_ASSETS, FEE_RATE_BNB, FEE_RATE_NO_BNB, BNB_SAFETY
+from balances import fetch_balances
+
+app = Flask(__name__)
+app.secret_key = FLASK_SECRET
+
+DEFAULT_SYMBOL = "BTCUSDC"
+
+def price_public(symbol: str):
+    client = BinanceClient()  # публичный клиент (мейннет)
+    data = client.ticker_price(symbol)
+    return float(data["price"])
+
+# ---------- PAGES ----------
+
+@app.get("/")
+def index():
+    return Response("""<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TradeSRVbot — Курс и Активы</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;margin:24px}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .price{font-size:42px;font-weight:700}
+  .muted{color:#666}
+  .ok{color:#0a0}.warn{color:#b00}
+  .btn{display:inline-block;padding:8px 12px;border:1px solid #333;border-radius:8px;text-decoration:none;color:#111}
+  .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin-top:16px}
+  table{border-collapse:collapse;width:100%}
+  th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
+  tr.bnb td{background:#fff8e1}
+  input,select{padding:8px 10px;border:1px solid #ccc;border-radius:8px}
+  .kv{display:grid;grid-template-columns:180px 1fr;gap:8px;align-items:center}
+</style>
+</head><body>
+  <h1>TradeSRVbot</h1>
+
+  <!-- Живой курс -->
+  <div class="card">
+    <div class="row">
+      <label for="symbol">Пара:</label>
+      <select id="symbol">
+        <option value="BTCUSDC" selected>BTC/USDC</option>
+        <option value="BTCUSDT">BTC/USDT</option>
+        <option value="BNBUSDC">BNB/USDC</option>
+      </select>
+      <span id="status" class="muted">Идёт подключение…</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <div class="price"><span id="price">—</span></div>
+      <div class="muted">обновление: <span id="ts">—</span></div>
+    </div>
+  </div>
+
+  <!-- Новая сделка -->
+  <div class="card">
+    <h2 style="margin:0 0 12px 0">Новая сделка</h2>
+    <div class="kv">
+      <div>Пара</div>
+      <div>
+        <select id="pair">
+          <option value="BTCUSDC" selected>BTC/USDC</option>
+          <option value="BTCUSDT">BTC/USDT</option>
+        </select>
+      </div>
+
+      <div>Сумма (USDC)</div>
+      <div><input id="amount" type="number" min="1" step="1" value="200"></div>
+
+      <div>Проверка BNB</div>
+      <div><label><input id="requireBNB" type="checkbox" checked> Не входить, если BNB не хватит на комиссии</label></div>
+
+      <div></div>
+      <div><a class="btn" href="#" id="btnCheck" style="display:none">Проверить комиссии</a></div>
+
+      <div></div>
+      <div id="feeResult" class="muted">—</div>
+    </div>
+  </div>
+
+  <!-- Топ-5 активов -->
+  <div class="card">
+    <div class="row" style="justify-content:space-between;width:100%">
+      <h2 style="margin:0">Активы (топ-5)</h2>
+      <div class="row" style="gap:8px">
+        <div class="muted">Всего активов: <span id="assetsCount">—</span></div>
+        <div class="muted">USDC свободно: <span id="usdcFree">—</span></div>
+        <a href="/assets" class="btn">Мои активы</a>
+      </div>
+    </div>
+    <div id="balancesWrap" class="muted" style="margin-top:8px">Загрузка…</div>
+  </div>
+
+<script>
+  const priceEl=document.getElementById('price');
+  const tsEl=document.getElementById('ts');
+  const statusEl=document.getElementById('status');
+  const sel=document.getElementById('symbol');
+
+  const balancesWrap=document.getElementById('balancesWrap');
+  const assetsCountEl=document.getElementById('assetsCount');
+  const usdcFreeEl=document.getElementById('usdcFree');
+
+  const pairEl=document.getElementById('pair');
+  const amountEl=document.getElementById('amount');
+  const requireBNBEl=document.getElementById('requireBNB');
+  const btnCheck=document.getElementById('btnCheck');
+  const feeResult=document.getElementById('feeResult');
+  function autoFee(){ btnCheck.click(); }
+  pairEl.addEventListener("change", autoFee);
+  amountEl.addEventListener("input", autoFee);
+  requireBNBEl.addEventListener("change", autoFee);
+  document.addEventListener("DOMContentLoaded", autoFee);
+  setTimeout(autoFee, 0);
+  setInterval(autoFee, 30000);
+
+  let last=null, timerPrice=null, timerBal=null;
+
+  function fmt(n,d=2){ return Number(n).toLocaleString('ru-RU',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+  function now(){ return new Date().toLocaleTimeString('ru-RU'); }
+
+  async function pollPrice(){
+    const symbol = sel.value;
+    try{
+      const r = await fetch(`/api/price?symbol=${encodeURIComponent(symbol)}`,{cache:'no-store'});
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      const p = Number(j.price);
+      const prev = last; last = p;
+      priceEl.textContent = fmt(p,2);
+      tsEl.textContent = now();
+      if(prev!==null){
+        const up = p>prev; const cls = up?'ok':'warn';
+        priceEl.classList.add(cls); setTimeout(()=>priceEl.classList.remove(cls),300);
+      }
+      statusEl.textContent='Live'; statusEl.className='ok';
+    }catch(e){
+      statusEl.textContent='Потеря связи — переподключение…'; statusEl.className='warn';
+    }
+  }
+
+  function renderTop(rows, top){
+    const list = (top && top.length) ? top : (rows||[]).slice(0,5);
+    if(!list.length){ balancesWrap.innerHTML='Нет активов'; assetsCountEl.textContent='0'; usdcFreeEl.textContent='0.00'; return; }
+    let usdcFree=0;
+    let html = '<table><tr><th>Актив</th><th>Доступно</th><th>Заморожено</th><th>Всего</th></tr>';
+    for(const r of list){
+      const isBNB = r.asset==='BNB';
+      if(r.asset==='USDC') usdcFree=r.free;
+      html += `<tr class="${isBNB?'bnb':''}"><td>${r.asset}</td><td>${fmt(r.free,8)}</td><td>${fmt(r.locked,8)}</td><td>${fmt(r.total,8)}</td></tr>`;
+    }
+    html += '</table>';
+    balancesWrap.innerHTML = html;
+    assetsCountEl.textContent = rows.length;
+    usdcFreeEl.textContent = fmt(usdcFree,2);
+  }
+
+  async function pollBalances(){
+    try{
+      const r = await fetch('/api/balances',{cache:'no-store'});
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      renderTop(j.rows||[], j.top||[]);
+    }catch(e){
+      balancesWrap.innerHTML='<span class="warn">Ошибка загрузки балансов</span>';
+    }
+  }
+
+  btnCheck.addEventListener('click', async (ev)=>{
+    ev.preventDefault();
+    feeResult.textContent = 'Считаю…';
+    try{
+      const body = {
+        symbol: pairEl.value,
+        amount_usdc: Number(amountEl.value||0),
+        require_bnb: requireBNBEl.checked
+      };
+      const r = await fetch('/api/fee_check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const j = await r.json();
+      if(!r.ok) throw new Error(j.error||('HTTP '+r.status));
+      feeResult.innerHTML =
+        `BNB требуется: <b>${fmt(j.need_bnb,6)}</b>, доступно: <b>${fmt(j.have_bnb,6)}</b><br>`+
+        `Комиссия (вход+выход) оценочно: ${fmt(j.fee_usdc,4)} USDC<br>`+
+        (j.enough ? '<span class="ok">BNB достаточно</span>' : '<span class="warn">BNB не хватает</span>')+
+        (j.require_block && !j.enough ? ' — вход заблокирован по настройке' : '');
+    }catch(e){
+      feeResult.innerHTML = '<span class="warn">Ошибка проверки: '+(e.message||e)+'</span>';
+    }
+  });
+
+  function start(){
+    if(timerPrice) clearInterval(timerPrice);
+    if(timerBal) clearInterval(timerBal);
+    pollPrice(); timerPrice=setInterval(pollPrice,500);
+    pollBalances(); timerBal=setInterval(pollBalances,5000);
+  }
+  sel.addEventListener('change', start);
+  start();
+</script>
+</body></html>""", mimetype="text/html")
+
+@app.get("/assets")
+def assets_page():
+    return Response("""<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Мои активы</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;margin:24px}
+  .muted{color:#666}
+  .btn{display:inline-block;padding:8px 12px;border:1px solid #333;border-radius:8px;text-decoration:none;color:#111}
+  table{border-collapse:collapse;width:100%} th,td{padding:8px;border-bottom:1px solid #eee;text-align:left}
+  tr.bnb td{background:#fff8e1}
+  input{padding:8px 10px;border:1px solid #ccc;border-radius:8px;width:240px}
+</style>
+</head><body>
+  <h1>Мои активы</h1>
+  <p><a class="btn" href="/">← На главную</a></p>
+
+  <div style="margin:12px 0">
+    <input id="q" placeholder="Поиск по тикеру (например, BNB)">
+    <span class="muted">Автообновление каждые 10 сек</span>
+  </div>
+
+  <div id="wrap" class="muted">Загрузка…</div>
+
+<script>
+  const wrap = document.getElementById('wrap');
+  const q = document.getElementById('q');
+  let all=[], timer=null;
+
+  function fmt(n,d=8){ return Number(n).toLocaleString('ru-RU',{minimumFractionDigits:d,maximumFractionDigits:d}); }
+
+  function render(){
+    const s=(q.value||'').trim().toUpperCase();
+    const rows = s ? all.filter(r=>r.asset.includes(s)) : all;
+    if(!rows.length){ wrap.innerHTML='Нет активов'; return; }
+    let html = '<table><tr><th>Актив</th><th>Доступно</th><th>Заморожено</th><th>Всего</th></tr>';
+    for(const r of rows){
+      const isBNB = r.asset==='BNB';
+      html += `<tr class="${isBNB?'bnb':''}"><td>${r.asset}</td><td>${fmt(r.free)}</td><td>${fmt(r.locked)}</td><td>${fmt(r.total)}</td></tr>`;
+    }
+    html += '</table>';
+    wrap.innerHTML = html;
+  }
+
+  async function load(){
+    try{
+      const r = await fetch('/api/balances',{cache:'no-store'});
+      const j = await r.json();
+      all = j.rows||[];
+      render();
+    }catch(e){ wrap.innerHTML='<span class="warn">Ошибка загрузки</span>'; }
+  }
+
+  q.addEventListener('input', render);
+  function start(){ if(timer) clearInterval(timer); load(); timer=setInterval(load, 10000); }
+  start();
+</script>
+</body></html>""", mimetype="text/html")
+
+# ---------- APIs ----------
+
+@app.get("/api/price")
+def api_price():
+    symbol = request.args.get("symbol", DEFAULT_SYMBOL).upper()
+    try:
+        price = price_public(symbol)
+        return jsonify({"symbol": symbol, "price": price, "ts": int(time.time())})
+    except Exception as e:
+        return jsonify({"error": str(e), "symbol": symbol}), 500
+
+@app.get("/api/balances")
+def api_balances():
+    try:
+        rows = fetch_balances()
+        mp = {r["asset"]: r for r in rows}
+        top = []
+        for a in TOP_ASSETS:
+            top.append(mp.get(a, {"asset": a, "free": 0.0, "locked": 0.0, "total": 0.0}))
+        return jsonify({"rows": rows, "top": top, "ts": int(time.time())})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.post("/api/fee_check")
+def api_fee_check():
+    """
+    Проверяет, хватит ли BNB на комиссии для входа и выхода.
+    Берём комиссию FEE_RATE_BNB (если BNB есть) или FEE_RATE_NO_BNB (если галочка не критична),
+    считаем комиссию как amount_usdc * fee * 2 и конвертируем в BNB по BNBUSDC.
+    """
+    try:
+        body = request.get_json(force=True)
+        symbol = (body.get("symbol") or DEFAULT_SYMBOL).upper()
+        amount_usdc = float(body.get("amount_usdc") or 0.0)
+        require_block = bool(body.get("require_bnb", True))
+
+        if amount_usdc <= 0:
+            return jsonify({"error":"Сумма должна быть > 0"}), 400
+
+        # Балансы и BNB free
+        rows = fetch_balances()
+        have_bnb = 0.0
+        for r in rows:
+            if r["asset"] == "BNB":
+                have_bnb = float(r["free"] or 0.0)
+                break
+
+        # Оценка комиссии (в USDC) и в BNB
+        # Если пользователь требует BNB, оцениваем по льготной ставке — так узнаем, сколько BNB нужно.
+        fee_rate = FEE_RATE_BNB
+        fee_usdc = amount_usdc * fee_rate * 2.0
+        bnb_price = price_public("BNBUSDC")
+        need_bnb = (fee_usdc / bnb_price) * BNB_SAFETY
+
+        enough = have_bnb >= need_bnb
+
+        return jsonify({
+            "symbol": symbol,
+            "amount_usdc": amount_usdc,
+            "fee_rate_used": fee_rate,
+            "fee_usdc": round(fee_usdc, 6),
+            "bnb_price": round(bnb_price, 6),
+            "need_bnb": round(need_bnb, 6),
+            "have_bnb": round(have_bnb, 6),
+            "enough": enough,
+            "require_block": require_block,
+            "ts": int(time.time())
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=True)

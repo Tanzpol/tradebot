@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+trade_state.json
+data/
+backups/
+.eggs/
+.dist/
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,43 @@
+--- bot.py	2025-09-04
++++ bot.py	2025-09-04
+@@ class TradeBot:
+     def __init__(self):
++        self._ws_started = {}
++        self._ws_threads = {}
++        self._ws_stops = {}
+
+@@ def start_price_stream(self, symbol):
+-        self._ws_thread.start()
++        self._ws_threads[symbol].start()
+
+@@ def monitor_loop(self):
+-        price = self.current_prices.get(trade["symbol"])s.get(trade["symbol"])
++        price = self.current_prices.get(trade["symbol"])
+
+-        self._sync_trade_to_state(trade)
+-        self._sync_trade_to_state(trade)
+-        self._sync_trade_to_state(trade)
++        self._sync_trade_to_state(trade)
+
+@@ def buy(self):
+         active_trade = {
+             "side": "buy",
+             "entry_price": entry_price,
+             "quantity": quantity,
+             "tp": tp,
+             "sl": sl,
+             "trailing_active": False,
+             "trailing_price": None,
+             "commission": commission,
++            "symbol": symbol,
+         }
+
+@@ def sync_trade_to_state(self, trade):
+     with open("trade_state.json", "w") as f:
+         json.dump(trade, f, indent=4)
+
++    def status(self):
++        if self.active_trade:
++            return f"Active trade: {self.active_trade}"
++        else:
++            return "No active trade"
