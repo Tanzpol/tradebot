@@ -1,0 +1,46 @@
+{
+  "trading": {
+    "symbol": "BTCUSDC",
+    "quote_asset": "USDC",
+    "max_concurrent_trades": 10,
+    "target_profit_usd": 50.0,
+    "trailing_percent": 20.0,
+    "stop_loss_ratio": 0.5,
+    "bnb_safety_multiplier": 2.5,
+    "min_trade_amount": 10.0,
+    "commission_rate": 0.1,
+    "commission_rate_with_bnb": 0.075
+  },
+  "architecture": {
+    "price_data_source": "mainnet_websocket",
+    "trading_api_source": "testnet_rest",
+    "note": "WebSocket gets BTCUSDC prices from mainnet, trading happens on testnet for safety"
+  },
+  "monitoring": {
+    "price_check_interval": 2,
+    "state_save_interval": 10,
+    "market_analysis_interval": 60
+  },
+  "websocket": {
+    "base_url": "wss://stream.binance.com:9443/ws/",
+    "reconnect_attempts": 5,
+    "reconnect_delay": 5,
+    "ping_interval": 20,
+    "source": "mainnet"
+  },
+  "api": {
+    "base_url_testnet": "https://testnet.binance.vision",
+    "base_url_mainnet": "https://api.binance.com", 
+    "timeout": 10,
+    "rate_limit": {
+      "orders_per_second": 10,
+      "requests_per_minute": 1200
+    }
+  },
+  "paths": {
+    "data_dir": "data",
+    "state_dir": "data/state", 
+    "trades_dir": "data/trades",
+    "logs_dir": "logs"
+  }
+}
