@@ -103,10 +103,15 @@ async def lifespan(app: FastAPI):
         ws_client.set_balance_callback(handle_balance_update)
         ws_client.set_order_callback(handle_order_update)
         
+        # 🔥 НОВОЕ: Запускаем WebSocket для цен ВСЕГДА при старте
+        if ws_client:
+            await ws_client.start("BTCUSDC")
+        
         # Запускаем автосохранение состояния
         await shared_state.start_auto_save()
         
         logger.info("✅ Trading Bot v2 initialized successfully")
+        logger.info("📊 Price monitoring active (independent of bot status)")
         
         yield
         
@@ -522,10 +527,6 @@ async def start_bot(background_tasks: BackgroundTasks):
         bot_running = True
         shared_state.set_bot_status(True)
         
-        # Запускаем WebSocket клиент для BTCUSDC
-        if ws_client:
-            await ws_client.start("BTCUSDC")
-        
         # Запускаем анализатор рынка
         market_analyzer_task = asyncio.create_task(market_analyzer_task_func())
         
@@ -597,4 +598,5 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "8080")),
         reload=os.getenv("DEBUG", "false").lower() == "true",
         log_level=os.getenv("LOG_LEVEL", "info").lower()
+
     )
